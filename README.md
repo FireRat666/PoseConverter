@@ -1,86 +1,62 @@
-[日本語版 README はこちら / Japanese README here](README-ja.md)
-
-# T2A PoseConverter
+# Pose Converter
 
 ![main](doc/T2A.png)
 
 ## Overview
-T2A PoseConverter is a Blender addon that allows you to convert character models between T-pose and A-pose. This addon also supports models with shape keys.
+Pose Converter is a Blender addon that allows you to copy a pose from one armature to another and apply it as the new rest pose. This is useful for transferring poses between characters, even if their rest poses (e.g., T-pose vs. A-pose) are different. The addon properly handles meshes with shape keys, rebuilding them to work with the new rest pose.
+
+This is a modified version of the original T2A Pose Converter, generalized to work with any source and target pose.
 
 ## Features
-- Convert from T-pose to A-pose
-- Convert from A-pose to T-pose
-- Proper handling of meshes with shape keys
-- Set current pose as rest pose
+- Copy a pose from a target armature to a source armature.
+- Apply the new pose as the rest pose for the armature and its associated meshes.
+- Automatically rebuilds shape keys to conform to the new rest pose.
+- Handles armatures with different bone naming conventions (e.g., `mixamorig:Hips` vs. `Hips`).
 
 ## Requirements
 - Blender 3.6 or higher
 
 ## Installation
-1. From Blender's menu, select "Edit" → "Preferences"
-2. Select the "Add-ons" tab and click the "Install" button
-3. Select the downloaded ZIP file (`t2a_pose_converter-v*.*.*.zip`)
-4. Enable the "T2A PoseConverter" addon (check the checkbox)
+1. From Blender's menu, select "Edit" → "Preferences".
+2. Select the "Add-ons" tab and click the "Install" button.
+3. Select the `Pose_converter.zip` file.
+4. Enable the "Pose Converter" addon by checking the checkbox.
 
 ## Usage
 
 ### Basic Usage
-1. Select the armature object you want to convert in the 3D View or View Layer
-2. Open the side panel (N key) and select the "CatHut" tab
-3. Configure conversion settings in the "T2A PoseConverter" panel
+1.  **Select Source Armature**: In the 3D View, select the armature you want to modify. This is your **Source**.
+2.  **Select Target Armature**: In the addon panel (N key > "CatHut" tab), use the "Target Armature" selector to choose the armature that has the pose you want to copy. This is your **Target**.
+3.  **Match Pose**: Click the **"Match Pose and Apply as Rest"** button.
 
-### Instructions (for automatic arm angle adjustment)
-![how to 01](doc/01.png)
-1. **Set Conversion Mode**:
-   - "T → A": Convert from T-pose to A-pose
-   - "A → T": Convert from A-pose to T-pose *Note: This only changes the direction of angle application
+The addon will perform the following steps:
+1.  The Source armature will snap to match the Target armature's pose.
+2.  This new pose will be applied as the rest pose.
+3.  Any meshes skinned to the Source armature will be updated.
+4.  If those meshes have shape keys, they will be rebuilt to work with the new rest pose.
 
-2. **Set Rotation Angles**:
-   - "Shoulder Y Rotation": Y-axis rotation angle for shoulder bones (default: 0 degrees)
-   - "UpperArm Y Rotation": Y-axis rotation angle for upper arm bones (default: 30 degrees)
+### Set Current Pose as Rest Pose
+If you have manually posed an armature and want to apply that pose as the new rest pose without copying from another target, you can use the **"Set as Rest Pose"** button. This performs the same mesh and shape key updates as the main operator.
 
-3. **Detect and Set Bones**:
-   - Click the "Detect Bones" button to automatically detect shoulder and upper arm bones
-   - Or manually specify bone names (selectable from dropdown)
-
-4. **Execute Conversion**:
-   - Click the "Convert Pose" button to execute the conversion
-
-### Instructions (for precise manual arm angle adjustment)
-![how to 02](doc/02.png)
-1. **Adjust Rest Pose**:
-   - In Pose mode, adjust to the pose you want as the rest pose
-2. **Set Rest Pose**:
-   - Press the "Set as Rest Pose" button to set the current pose as the rest pose
-
-### About Automatic Bone Detection
-The addon automatically detects bones based on common naming conventions such as:
-- Left Shoulder: `shoulder_l`, `leftshoulder`, `肩_l`, `shoulder.l`, `l_shoulder`, `shoulderl`, `clavicle_l`, `clavicle.l`, `肩.l`, `肩l`, `左肩`, etc.
-- Right Shoulder: `shoulder_r`, `rightshoulder`, `肩_r`, `shoulder.r`, `r_shoulder`, `shoulderr`, `clavicle_r`, `clavicle.r`, `肩.r`, `肩r`, `右肩`, etc.
-- Left Upper Arm: `upperarm_l`, `leftupperarm`, `上腕_l`, `upperarm.l`, `l_upperarm`, `uppearml`, `arm_l`, `arm.l`, `腕_l`, `腕.l`, `腕l`, `左腕`, `左上腕`, etc.
-- Right Upper Arm: `upperarm_r`, `rightupperarm`, `上腕_r`, `upperarm.r`, `r_upperarm`, `upperarmr`, `arm_r`, `arm.r`, `腕_r`, `腕.r`, `腕r`, `右腕`, `右上腕`, etc.
-
-If bones are not detected as intended, please set them manually.
+## About Bone Matching
+The addon matches bones between the two armatures by their base names. It automatically strips common prefixes (like `mixamorig:`) before comparing, so `mixamorig:Hips` on the target will correctly match `Hips` on the source.
 
 ## About Shape Key Processing
 This addon specifically supports processing meshes with shape keys:
-1. Saves the pre-conversion mesh state as a shape key
-2. Executes bone rotation and rest pose application
-3. Rebuilds all shape keys to match the new rest pose
+1. Saves the pre-conversion mesh state as a temporary shape key.
+2. Applies the new pose to the armature and sets it as the rest pose.
+3. Rebuilds all existing shape keys to match the new rest pose.
 
-This ensures that shape key effects are properly maintained after pose conversion.
+This ensures that shape key effects are properly maintained after the conversion.
 
 ## Notes
-- It is recommended to backup your model before conversion
-- Processing may take time for meshes with many shape keys
-- Please verify that the model functions correctly after conversion
-- If pose changes interfere with shape keys, the conversion may not work as intended
-
-## Troubleshooting
-- If bones are not detected, please specify bone names manually
+- It is strongly recommended to **backup your model** before using this tool.
+- Processing may take some time for meshes with many shape keys.
+- Always verify that the model and its shape keys function correctly after conversion.
 
 ## License
 MIT License
 
 ## Author
-CatHut
+- Original T2A Pose Converter by CatHut
+- Modified by Assistant
