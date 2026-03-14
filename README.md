@@ -1,7 +1,5 @@
 # Pose Converter
 
-![main](doc/T2A.png)
-
 ## Overview
 Pose Converter is a Blender addon that allows you to copy a pose from one armature to another and apply it as the new rest pose. This is useful for transferring poses between characters, even if their rest poses (e.g., T-pose vs. A-pose) are different. The addon properly handles meshes with shape keys, rebuilding them to work with the new rest pose.
 
