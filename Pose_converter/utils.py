@@ -9,10 +9,17 @@ def get_addon_log_path():
     return os.path.join(log_dir, "pose_converter_log.txt")
 
 def write_log(message: str):
-    log_path = get_addon_log_path()
-    timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} {message}\n")
+    # Print to Blender Console (Window > Toggle System Console)
+    print(f"[PoseConverter] {message}")
+    
+    # Also write to file
+    try:
+        log_path = get_addon_log_path()
+        timestamp = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp} {message}\n")
+    except Exception as e:
+        print(f"[PoseConverter] Failed to write to log file: {e}")
 
 def print_and_log(report_fn, level: str, message: str):
     report_fn({level}, message)
@@ -32,17 +39,17 @@ def restore_shape_key_values(obj, key_values):
 
 def find_related_mesh_objects(arm_obj):
     """
-    アーマチュアモディファイアで関連付けられたメッシュオブジェクトを検索
+    Find mesh objects associated with an armature modifier.
     
     Parameters:
-        arm_obj: アーマチュアオブジェクト
+        arm_obj: Armature object
         
     Returns:
-        関連するメッシュオブジェクトのリスト
+        A list of related mesh objects
     """
     related_meshes = []
     
-    # アーマチュアモディファイアで関連付けられたメッシュを検索
+    # Search for meshes associated with an armature modifier
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
             for modifier in obj.modifiers:
@@ -54,8 +61,8 @@ def find_related_mesh_objects(arm_obj):
 
 def apply_shape_key_as_basis(obj, key_name):
     """
-    指定したシェイプキーをBasisとして適用し、
-    他のすべてのシェイプキーを新しいBasisに対する相対変形として再構築する
+    Apply the specified shape key as the Basis and rebuild all other shape keys
+    as relative deformations to the new Basis.
     """
     if not obj.data.shape_keys:
         write_log("No shape keys found")
@@ -67,14 +74,14 @@ def apply_shape_key_as_basis(obj, key_name):
     
     write_log(f"Applying shape key '{key_name}' as new Basis")
     
-    # 新しいBasisとなるシェイプキーをアクティブにする
+    # Activate the shape key that will become the new Basis
     new_basis_key = kb[key_name]
     new_basis_key.value = 1.0
     
-    # Basisキーを取得（通常は最初のキー）
+    # Get the Basis key (usually the first key)
     basis_key = kb[0] if len(kb) > 0 else None
     
-    # 保存対象のシェイプキーリストを作成（BassiとnewBasis以外）
+    # Create a list of shape keys to process (excluding Basis and the new Basis)
     shape_keys_to_process = [
         key for key in kb 
         if key != new_basis_key and key != basis_key and key.name != 'Basis'
@@ -82,61 +89,61 @@ def apply_shape_key_as_basis(obj, key_name):
     
     write_log(f"Found {len(shape_keys_to_process)} shape keys to rebuild")
     
-    # 各シェイプキーに対して処理
+    # Process each shape key
     for shape_key in shape_keys_to_process:
-        # 元の値を保存
+        # Save the original value
         original_name = shape_key.name
         original_value = shape_key.value
         write_log(f"Rebuilding shape key: {original_name}")
         
-        # すべてのシェイプキーを非アクティブにする
+        # Deactivate all shape keys
         for k in kb:
             k.value = 0.0
             
-        # 処理対象のシェイプキーをアクティブにする
+        # Activate the shape key to be processed
         shape_key.value = 1.0
         
-        # 現在の混合形状で一時キーを作成
+        # Create a temporary key from the current mix
         bpy.ops.object.shape_key_add(from_mix=True)
-        # 最後に追加されたシェイプキーを取得
+        # Get the last added shape key
         temp_key = kb[-1]
-        # 名前を変更
+        # Change the name
         temp_key.name = "temp"
         
-        # 元のシェイプキーを削除
+        # Remove the original shape key
         obj.active_shape_key_index = kb.find(original_name)
         bpy.ops.object.shape_key_remove()
         
-        # 一時キーを元の名前にリネーム
+        # Rename the temporary key to the original name
         temp_key.name = original_name
         temp_key.value = original_value
     
-    # 最後に新しいBasisを作成
-    # すべてのキーを非アクティブにする
+    # Finally, create the new Basis
+    # Deactivate all shape keys
     for k in kb:
         k.value = 0.0
         
-    # 新しいBasisとなるキーをアクティブにする
+    # Activate the new basis key
     new_basis_key.value = 1.0
     
-    # 現在のアクティブシェイプキーを先頭に移動
+    # Move the current active shape key to the top
     obj.active_shape_key_index = kb.find(key_name)
     bpy.ops.object.shape_key_move(type='TOP')
     
-    # 元のBasisを削除
+    # Remove the original Basis
     bpy.ops.object.shape_key_remove()
     
-    # 現在の形状で新しいBasisを作成
+    # Create a new Basis from the current shape
     bpy.ops.object.shape_key_add(from_mix=True)
-    # 最後に追加されたシェイプキーを最初に移動
+    # Move the last added shape key to the beginning
     bpy.ops.object.shape_key_move(type='TOP')
-    # 名前をBasisに変更
+    # Change the name to Basis
     kb[0].name = 'Basis'
     
     write_log("Shape key basis rebuilt with all dependent keys adjusted")
 
 def remove_shape_key(obj, key_name):
-    """シェイプキーを削除"""
+    """Remove a shape key"""
     if not obj.data.shape_keys:
         return
     idx = obj.data.shape_keys.key_blocks.find(key_name)
@@ -145,7 +152,7 @@ def remove_shape_key(obj, key_name):
         bpy.ops.object.shape_key_remove()
 
 def rename_shape_key(obj, old_name, new_name):
-    """シェイプキーの名前を変更"""
+    """Rename a shape key"""
     if not obj.data.shape_keys:
         return
     kb = obj.data.shape_keys.key_blocks
@@ -154,37 +161,37 @@ def rename_shape_key(obj, old_name, new_name):
 
 def apply_new_armature_modifier(mesh_obj, arm_obj, report_fn):
     """
-    既存のアーマチュアモディファイアはそのままにし、新しいモディファイアを追加して適用する
+    Keep the existing armature modifier and apply a new one.
     
     Parameters:
-        mesh_obj: メッシュオブジェクト
-        arm_obj: アーマチュアオブジェクト
-        report_fn: レポート用関数
+        mesh_obj: Mesh object
+        arm_obj: Armature object
+        report_fn: Report function
     """
-    # オブジェクトモードに切り替え
+    # Switch to Object Mode
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # メッシュオブジェクトをアクティブに
+    # Activate the mesh object
     bpy.context.view_layer.objects.active = mesh_obj
     mesh_obj.select_set(True)
     
-    # アーマチュアオブジェクトは選択しない
+    # Do not select the armature object
     arm_obj.select_set(False)
     
     write_log("Adding new armature modifier for application...")
     
-    # 新しいアーマチュアモディファイアを追加
+    # Add a new armature modifier
     mod = mesh_obj.modifiers.new(name="ArmatureTemp", type='ARMATURE')
     mod.object = arm_obj
     
-    # 新しく追加したモディファイアを適用
+    # Apply the newly added modifier
     try:
         write_log(f"Applying new armature modifier: {mod.name}")
         bpy.ops.object.modifier_apply(modifier=mod.name)
         print_and_log(report_fn, 'INFO', f"Applied new armature modifier")
     except Exception as e:
         print_and_log(report_fn, 'WARNING', f"Failed to apply modifier: {e}")
-        # 失敗時も続行
+        # Continue even on failure
         
     write_log("New armature modifier applied, original modifiers preserved")
     
