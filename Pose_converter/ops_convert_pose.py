@@ -1,6 +1,7 @@
 import bpy
 from bpy.types import Operator
 import traceback
+import os
 from .utils import (
     write_log,
     find_related_mesh_objects,
@@ -112,6 +113,45 @@ def copy_pose_from_target(source_arm, target_arm):
         write_log(f"Error: {e}")
         write_log(traceback.format_exc())
         return False
+
+def import_armature_from_blend(filepath):
+    """
+    Appends an armature from a .blend file into the current scene.
+    Returns the appended object or None.
+    """
+    try:
+        write_log(f"Appending armature from: {filepath}")
+        
+        # Load all objects from the blend file
+        with bpy.data.libraries.load(filepath) as (data_from, data_to):
+            # We want to import objects, specifically armatures
+            # We assume the file contains at least one object that is an armature
+            data_to.objects = [name for name in data_from.objects]
+            
+        imported_objects = []
+        target_armature = None
+        
+        # Link objects to scene and find the armature
+        for obj in data_to.objects:
+            if obj:
+                bpy.context.collection.objects.link(obj)
+                imported_objects.append(obj)
+                if obj.type == 'ARMATURE' and target_armature is None:
+                    target_armature = obj
+        
+        if target_armature:
+            write_log(f"Successfully imported armature: {target_armature.name}")
+            return target_armature, imported_objects
+        else:
+            write_log("No armature found in the specified .blend file.")
+            # Cleanup if no armature found
+            for obj in imported_objects:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            return None, []
+            
+    except Exception as e:
+        write_log(f"Error importing from .blend: {e}")
+        return None, []
 
 def save_mesh_as_shape_key(arm_obj, mesh_obj, report_fn):
     """Saves the current deformation of the mesh as a shape key."""
@@ -239,23 +279,58 @@ class POSECONV_OT_ConvertPose(Operator):
         
         arm_obj = context.object
         props = context.scene.pose_converter_props
-        target_arm = props.target_armature
-
+        
         if not arm_obj or arm_obj.type != 'ARMATURE':
             self.report({'WARNING'}, "Select a source Armature object.")
             return {'CANCELLED'}
         
-        if not target_arm:
-            self.report({'WARNING'}, "Select a target Armature.")
-            return {'CANCELLED'}
+        # 1. Acquire Target Armature
+        target_arm = None
+        imported_objects = []
+        
+        if props.target_source == 'CUSTOM':
+            target_arm = props.target_armature
+            if not target_arm:
+                self.report({'WARNING'}, "Select a target Armature.")
+                return {'CANCELLED'}
+        else:
+            # Import default pose from .blend file
+            filename = "male_default.blend" if props.target_source == 'MALE' else "female_default.blend"
+            filepath = os.path.join(os.path.dirname(__file__), filename)
+            
+            if not os.path.exists(filepath):
+                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
+                 return {'CANCELLED'}
+            
+            target_arm, imported_objects = import_armature_from_blend(filepath)
+            if not target_arm:
+                self.report({'ERROR'}, "Failed to import armature from file.")
+                return {'CANCELLED'}
 
+        # 2. Copy the pose
         try:
-            # 1. Copy the pose
             if not copy_pose_from_target(arm_obj, target_arm):
                 self.report({'ERROR'}, "Pose copying failed or no bones matched.")
+                # Cleanup imported objects if failed
+                if imported_objects:
+                    for obj in imported_objects:
+                        bpy.data.objects.remove(obj, do_unlink=True)
                 return {'CANCELLED'}
-            
-            # 2. Process Meshes
+        except Exception as e:
+             # Cleanup on error
+             if imported_objects:
+                 for obj in imported_objects:
+                     bpy.data.objects.remove(obj, do_unlink=True)
+             raise e
+
+        # Cleanup imported objects now that pose is copied (Constraints are baked and removed inside copy_pose_from_target)
+        if imported_objects:
+            write_log("Removing imported temporary armature...")
+            for obj in imported_objects:
+                bpy.data.objects.remove(obj, do_unlink=True)
+
+        try:
+            # 3. Process Meshes
             related_meshes = find_related_mesh_objects(arm_obj)
             if not related_meshes:
                 self.report({'WARNING'}, "No meshes found for the selected armature. Pose copied but not applied to meshes.")
@@ -270,7 +345,7 @@ class POSECONV_OT_ConvertPose(Operator):
             for mesh_obj in meshes_without_shape_keys:
                 process_without_shape_keys(arm_obj, mesh_obj, self.report)
             
-            # 3. Apply as Rest Pose
+            # 4. Apply as Rest Pose
             bpy.context.view_layer.objects.active = arm_obj
             arm_obj.select_set(True)
             for mesh_obj in related_meshes:
@@ -278,7 +353,7 @@ class POSECONV_OT_ConvertPose(Operator):
             
             apply_as_rest_pose(arm_obj)
             
-            # 4. Cleanup Shape Keys
+            # 5. Cleanup Shape Keys
             for mesh_obj in meshes_with_shape_keys:
                 process_shape_keys_after_rest_pose(mesh_obj, self.report)
             

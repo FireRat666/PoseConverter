@@ -6,7 +6,7 @@
 bl_info = {
     "name": "Pose Converter",
     "author": "FireRat",
-    "version": (0, 1, 1),
+    "version": (0, 1, 2),
     "blender": (3, 6, 0),
     "location": "View3D > Tool Shelf > FireRat",
     "description": "Copy pose from one armature to another and apply it as a rest pose.",
