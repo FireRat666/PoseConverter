@@ -1,5 +1,5 @@
 import bpy
-from bpy.props import PointerProperty, EnumProperty
+from bpy.props import PointerProperty, EnumProperty, BoolProperty
 from bpy.types import Panel, PropertyGroup
 from .utils import find_related_mesh_objects
 
@@ -22,16 +22,22 @@ class PoseConverterProperties(PropertyGroup):
         poll=lambda self, obj: obj.type == 'ARMATURE'
     )
 
+    add_missing_bones: BoolProperty(
+        name="Add Missing Bones",
+        description="Add bones from the target armature that are missing in the source armature",
+        default=False
+    )
+
 class PoseToolPanel(Panel):
     bl_label = "Pose Converter"
-    bl_idname = "VIEW3D_PT_pose_converter"
+    bl_idname = "VIEW3D_PT_firerat_pose_converter"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'FireRat'
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.pose_converter_props
+        props = context.scene.firerat_pose_converter_props
         
         # Source Armature (Active Object)
         armature = context.object if context.object and context.object.type == 'ARMATURE' else None
@@ -59,6 +65,8 @@ class PoseToolPanel(Panel):
                 main_box.label(text="Source and Target cannot be the same", icon='ERROR')
         
         main_box.separator()
+        main_box.prop(props, "add_missing_bones")
+        main_box.separator()
 
         # Determine if the operator should be enabled
         is_ready = False
@@ -72,7 +80,7 @@ class PoseToolPanel(Panel):
         col = main_box.column(align=True)
         col.enabled = is_ready
         col.scale_y = 1.5
-        col.operator("poseconv.convert_pose", text="Match Pose & Apply Rest", icon='POSE_HLT')
+        col.operator("firerat_poseconv.convert_pose", text="Match Pose & Apply Rest", icon='POSE_HLT')
         
         layout.separator()
         
@@ -80,10 +88,15 @@ class PoseToolPanel(Panel):
         utils_box = layout.box()
         utils_box.label(text="Utilities", icon='TOOL_SETTINGS')
         
+        # Add Missing Bones Button (Separate)
+        bone_row = utils_box.row()
+        bone_row.enabled = is_ready
+        bone_row.operator("firerat_poseconv.add_missing_bones", text="Add Missing Bones", icon='BONE_DATA')
+        
         # Rest Pose Button
         rest_row = utils_box.row()
         rest_row.enabled = bool(armature)
-        rest_row.operator("poseconv.set_rest_pose", text="Apply Current Pose as Rest", icon='ARMATURE_DATA')
+        rest_row.operator("firerat_poseconv.set_rest_pose", text="Apply Current Pose as Rest", icon='ARMATURE_DATA')
 
 
 def register():

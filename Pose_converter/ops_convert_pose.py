@@ -39,6 +39,84 @@ def strip_prefix(name):
         return name.split(":")[-1]
     return name
 
+def add_missing_bones_from_target(source_arm, target_arm):
+    """Adds missing bones from target_arm to source_arm in Edit Mode."""
+    write_log(f"Checking for missing bones from {target_arm.name} to {source_arm.name}")
+    
+    # Map of normalized names in source
+    source_bone_names = {strip_prefix(b.name) for b in source_arm.data.bones}
+    
+    missing_bones_data = []
+    
+    # To get 'roll' and proper hierarchy, we need to toggle Edit Mode on target.
+    original_active = bpy.context.view_layer.objects.active
+    
+    bpy.context.view_layer.objects.active = target_arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    target_edit_bones = target_arm.data.edit_bones
+    
+    for t_bone in target_edit_bones:
+        norm_name = strip_prefix(t_bone.name)
+        if norm_name not in source_bone_names:
+            parent_name = None
+            if t_bone.parent:
+                parent_name = strip_prefix(t_bone.parent.name)
+            
+            # Store data to create it later
+            missing_bones_data.append({
+                'name': t_bone.name,
+                'norm_name': norm_name,
+                'head': t_bone.head.copy(),
+                'tail': t_bone.tail.copy(),
+                'roll': t_bone.roll,
+                'parent': parent_name,
+                'use_connect': t_bone.use_connect
+            })
+    
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    if not missing_bones_data:
+        write_log("No missing bones found.")
+        bpy.context.view_layer.objects.active = original_active
+        return 0
+    
+    write_log(f"Found {len(missing_bones_data)} missing bones. Adding to {source_arm.name}...")
+    
+    # Switch source to Edit Mode
+    bpy.context.view_layer.objects.active = source_arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    source_edit_bones = source_arm.data.edit_bones
+    
+    # Map normalized names to actual bone names in source (including newly added)
+    source_norm_to_real = {strip_prefix(b.name): b.name for b in source_edit_bones}
+    
+    # Add bones
+    for b_data in missing_bones_data:
+        new_bone = source_edit_bones.new(b_data['name'])
+        new_bone.head = b_data['head']
+        new_bone.tail = b_data['tail']
+        new_bone.roll = b_data['roll']
+        source_norm_to_real[b_data['norm_name']] = new_bone.name
+        write_log(f"Added bone: {new_bone.name}")
+        
+    # Set parenting
+    for b_data in missing_bones_data:
+        if b_data['parent']:
+            real_bone_name = source_norm_to_real.get(b_data['norm_name'])
+            real_parent_name = source_norm_to_real.get(b_data['parent'])
+            
+            if real_bone_name and real_parent_name:
+                bone = source_edit_bones.get(real_bone_name)
+                parent = source_edit_bones.get(real_parent_name)
+                if bone and parent:
+                    bone.parent = parent
+                    bone.use_connect = b_data['use_connect']
+                    
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.objects.active = original_active
+    write_log("Finished adding missing bones.")
+    return len(missing_bones_data)
+
 def copy_pose_from_target(source_arm, target_arm):
     """
     Copies the pose from the target armature to the source armature using CONSTRAINTS.
@@ -76,7 +154,6 @@ def copy_pose_from_target(source_arm, target_arm):
                 c_rot.target = target_arm
                 c_rot.subtarget = target_bone.name
                 c_rot.name = "TEMP_POSE_CONV_ROT"
-                # Defaults are World <-> World, which is what we want
                 
                 constraints_to_remove.append((source_bone, c_rot))
                 
@@ -98,7 +175,6 @@ def copy_pose_from_target(source_arm, target_arm):
         bpy.context.view_layer.update()
         
         # Bake the constraints into the Pose
-        # This calculates the Loc/Rot/Scale needed to match the constraints visually
         bpy.ops.pose.visual_transform_apply()
         
         # Remove constraints
@@ -124,8 +200,6 @@ def import_armature_from_blend(filepath):
         
         # Load all objects from the blend file
         with bpy.data.libraries.load(filepath) as (data_from, data_to):
-            # We want to import objects, specifically armatures
-            # We assume the file contains at least one object that is an armature
             data_to.objects = [name for name in data_from.objects]
             
         imported_objects = []
@@ -268,8 +342,56 @@ def process_without_shape_keys(arm_obj, mesh_obj, report_fn):
         report_fn({'ERROR'}, f"Process failed for mesh '{mesh_obj.name}': {e}")
         return False
 
+class POSECONV_OT_AddMissingBones(Operator):
+    bl_idname = "firerat_poseconv.add_missing_bones"
+    bl_label = "Add Missing Bones"
+    bl_description = "Add bones from the target armature that are missing in the source armature"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        arm_obj = context.object
+        props = context.scene.firerat_pose_converter_props
+        
+        if not arm_obj or arm_obj.type != 'ARMATURE':
+            self.report({'WARNING'}, "Select a source Armature object.")
+            return {'CANCELLED'}
+
+        target_arm = None
+        imported_objects = []
+        
+        if props.target_source == 'CUSTOM':
+            target_arm = props.target_armature
+            if not target_arm:
+                self.report({'WARNING'}, "Select a target Armature.")
+                return {'CANCELLED'}
+        else:
+            filename = "male_default.blend" if props.target_source == 'MALE' else "female_default.blend"
+            filepath = os.path.join(os.path.dirname(__file__), filename)
+            
+            if not os.path.exists(filepath):
+                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
+                 return {'CANCELLED'}
+            
+            target_arm, imported_objects = import_armature_from_blend(filepath)
+            if not target_arm:
+                self.report({'ERROR'}, "Failed to import armature from file.")
+                return {'CANCELLED'}
+
+        try:
+            added_count = add_missing_bones_from_target(arm_obj, target_arm)
+            self.report({'INFO'}, f"Added {added_count} missing bones.")
+        except Exception as e:
+            write_log(f"Error adding missing bones: {e}")
+            self.report({'ERROR'}, f"Failed to add missing bones: {e}")
+        finally:
+            if imported_objects:
+                for obj in imported_objects:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+
+        return {'FINISHED'}
+
 class POSECONV_OT_ConvertPose(Operator):
-    bl_idname = "poseconv.convert_pose"
+    bl_idname = "firerat_poseconv.convert_pose"
     bl_label = "Match Pose and Apply as Rest"
     bl_description = "Copy pose from target and apply as the new rest pose, preserving shape keys"
     bl_options = {'REGISTER', 'UNDO'} 
@@ -278,7 +400,7 @@ class POSECONV_OT_ConvertPose(Operator):
         write_log("Starting pose conversion...")
         
         arm_obj = context.object
-        props = context.scene.pose_converter_props
+        props = context.scene.firerat_pose_converter_props
         
         if not arm_obj or arm_obj.type != 'ARMATURE':
             self.report({'WARNING'}, "Select a source Armature object.")
@@ -307,6 +429,14 @@ class POSECONV_OT_ConvertPose(Operator):
                 self.report({'ERROR'}, "Failed to import armature from file.")
                 return {'CANCELLED'}
 
+        # 1.5 Add Missing Bones if requested
+        if props.add_missing_bones:
+            try:
+                add_missing_bones_from_target(arm_obj, target_arm)
+            except Exception as e:
+                write_log(f"Error adding missing bones during conversion: {e}")
+                self.report({'WARNING'}, f"Failed to add some missing bones: {e}")
+
         # 2. Copy the pose
         try:
             if not copy_pose_from_target(arm_obj, target_arm):
@@ -323,7 +453,7 @@ class POSECONV_OT_ConvertPose(Operator):
                      bpy.data.objects.remove(obj, do_unlink=True)
              raise e
 
-        # Cleanup imported objects now that pose is copied (Constraints are baked and removed inside copy_pose_from_target)
+        # Cleanup imported objects now that pose is copied
         if imported_objects:
             write_log("Removing imported temporary armature...")
             for obj in imported_objects:
@@ -370,7 +500,7 @@ class POSECONV_OT_ConvertPose(Operator):
         return {'FINISHED'}
     
 class POSECONV_OT_SetRestPose(Operator):
-    bl_idname = "poseconv.set_rest_pose"
+    bl_idname = "firerat_poseconv.set_rest_pose"
     bl_label = "Set Current as Rest Pose"
     bl_description = "Set current pose as rest pose and update meshes"
     bl_options = {'REGISTER', 'UNDO'}
@@ -419,9 +549,11 @@ class POSECONV_OT_SetRestPose(Operator):
         return {'FINISHED'}
 
 def register():
+    bpy.utils.register_class(POSECONV_OT_AddMissingBones)
     bpy.utils.register_class(POSECONV_OT_ConvertPose)
     bpy.utils.register_class(POSECONV_OT_SetRestPose)
 
 def unregister():
     bpy.utils.unregister_class(POSECONV_OT_SetRestPose)
     bpy.utils.unregister_class(POSECONV_OT_ConvertPose)
+    bpy.utils.unregister_class(POSECONV_OT_AddMissingBones)

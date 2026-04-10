@@ -1,70 +1,58 @@
-# Pose Converter
+# FireRat Pose Converter
 
 ## Overview
-Pose Converter is a Blender addon that allows you to copy a pose from one armature to another and apply it as the new rest pose. This is useful for transferring poses between characters, even if their rest poses (e.g., T-pose vs. A-pose) are different. The addon properly handles meshes with shape keys, rebuilding them to work with the new rest pose.
+**FireRat Pose Converter** is an enhanced Blender addon for copying poses between armatures and applying them as new rest poses. It is designed to handle differences in rest poses (e.g., T-pose to A-pose) and ensures that all associated meshes—including those with complex shape keys—are correctly updated to the new rest state.
 
-This is a modified version of the original T2A Pose Converter, generalized to work with any source and target pose.
+This version is a fork of the original T2A Pose Converter, expanded with features like missing bone detection and improved compatibility.
 
 ## Features
-- **Copy Pose**: Copy a pose from a target armature to a source armature.
-- **Built-in Presets**: Includes default Male and Female A-pose presets (using `.blend` files).
-- **Apply as Rest Pose**: Apply the new pose as the rest pose for the armature and its associated meshes.
-- **Shape Key Support**: Automatically rebuilds shape keys to conform to the new rest pose.
-- **Smart Matching**: Handles armatures with different bone naming conventions (e.g., `mixamorig:Hips` vs. `Hips`).
+- **Match Pose & Apply Rest**: Copy a pose from a target armature and bake it as the new rest pose.
+- **Add Missing Bones**: Automatically detects bones present in the target but missing in the source, and adds them with correct placement and parenting.
+- **Built-in Presets**: Quick-access default Male and Female A-pose presets.
+- **Shape Key Preservation**: Advanced logic to rebuild shape keys so they remain functional after the rest pose change.
+- **Smart Bone Matching**: Automatically handles common prefix differences (e.g., matching `mixamorig:Hips` to `Hips`).
+- **Coexistence Mode**: Designed to run alongside the original T2A plugin without naming conflicts.
 
 ## Requirements
 - Blender 3.6 or higher
 
 ## Installation
-1. From Blender's menu, select "Edit" → "Preferences".
-2. Select the "Add-ons" tab and click the "Install" button.
-3. Select the `Pose_converter.zip` file.
-4. Enable the "Pose Converter" addon by checking the checkbox.
+1. Download the `Pose_converter` folder or zip.
+2. In Blender, go to **Edit** → **Preferences** → **Add-ons**.
+3. Click **Install...** and select the zip file, or manually place the folder in your Blender scripts directory.
+4. Search for **"FireRat Pose Converter"** and enable it.
 
 ## Usage
 
-### Basic Usage
-1.  **Select Source Armature**: In the 3D View, select the armature you want to modify. This is your **Source**.
-2.  **Select Target Source**: In the addon panel (N key > "FireRat" tab), choose one of the following:
-    *   **Custom**: Allows you to select another armature in the scene to copy the pose from.
-    *   **Default Male**: Applies a standard Male A-pose.
-    *   **Default Female**: Applies a standard Female A-pose.
-3.  **Match Pose**: Click the **"Match Pose & Apply Rest"** button.
+### Main Conversion
+The main workflow is located in the **3D View** → **Tool Shelf (N-panel)** → **FireRat** tab.
 
-The addon will perform the following steps:
-1.  The Source armature will snap to match the Target armature's pose.
-2.  This new pose will be applied as the rest pose.
-3.  Any meshes skinned to the Source armature will be updated.
-4.  If those meshes have shape keys, they will be rebuilt to work with the new rest pose.
+1.  **Select Source Armature**: Select the armature you want to modify in the 3D viewport.
+2.  **Choose Target Source**:
+    *   **Custom**: Select another armature already in your scene.
+    *   **Default Male/Female**: Use the included high-quality A-pose references.
+3.  **Options**:
+    *   **Add Missing Bones**: If enabled, the tool will create any bones found in the target that your source armature is currently missing before matching the pose.
+4.  **Execute**: Click **Match Pose & Apply Rest**.
 
-### Customizing Default Poses
-The "Default Male" and "Default Female" options rely on `.blend` files located in the addon directory. You can replace these with your own custom poses:
-1.  Navigate to the installed addon folder (usually `%APPDATA%\Blender Foundation\Blender\<version>\scripts\addons\Pose_converter`).
-2.  Replace `male_default.blend` or `female_default.blend` with your own Blender file containing an armature in the desired pose.
-    *   The addon will temporarily import the armature from this file, copy its pose, and then delete it.
+### Utilities
+*   **Add Missing Bones**: A standalone button to only add missing bones from the target without changing the current pose.
+*   **Apply Current Pose as Rest**: If you've manually posed your character and want to bake that state as the new rest pose (including mesh/shape key updates), use this utility.
 
-### Set Current Pose as Rest Pose
-If you have manually posed an armature and want to apply that pose as the new rest pose without copying from another target, you can use the **"Apply Current Pose as Rest"** button in the Utilities section. This performs the same mesh and shape key updates as the main operator.
+## Bone Matching Logic
+The addon compares bones by stripping namespace prefixes. For example, `prefix:BoneName` will match `BoneName` or `other_prefix:BoneName`. This makes it highly compatible with Mixamo, VRM, and standard game engine rigs.
 
-## About Bone Matching
-The addon matches bones between the two armatures by their base names. It automatically strips common prefixes (like `mixamorig:`) before comparing, so `mixamorig:Hips` on the target will correctly match `Hips` on the source.
+## Shape Key Processing
+Changing a rest pose usually breaks shape keys. This addon solves that by:
+1. Creating a temporary snapshot of the mesh deformation.
+2. Applying the new armature rest pose.
+3. Re-calculating every shape key's vertex offsets relative to the new basis.
+4. Cleaning up temporary data to leave a clean, functional model.
 
-## About Shape Key Processing
-This addon specifically supports processing meshes with shape keys:
-1. Saves the pre-conversion mesh state as a temporary shape key.
-2. Applies the new pose to the armature and sets it as the rest pose.
-3. Rebuilds all existing shape keys to match the new rest pose.
+## Credits & License
+- **Original Concept**: T2A Pose Converter by CatHut.
+- **Enhancements**: Developed by FireRat.
+- **License**: MIT License.
 
-This ensures that shape key effects are properly maintained after the conversion.
-
-## Notes
-- It is strongly recommended to **backup your model** before using this tool.
-- Processing may take some time for meshes with many shape keys.
-- Always verify that the model and its shape keys function correctly after conversion.
-
-## License
-MIT License
-
-## Author
-- Original T2A Pose Converter by CatHut
-- Modified by FireRat
+---
+*Note: Always backup your `.blend` file before performing rest pose operations, as these changes involve complex mesh data rebuilding.*
