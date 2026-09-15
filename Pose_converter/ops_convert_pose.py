@@ -14,7 +14,10 @@ def _get_view3d_context():
     or (None, None) if none exists.  Used to build a temp_override for operators
     that require a 3D Viewport context in Blender 4.2+ / 5.x.
     """
-    for area in bpy.context.screen.areas:
+    screen = bpy.context.screen
+    if screen is None:
+        return None, None
+    for area in screen.areas:
         if area.type == 'VIEW_3D':
             for region in area.regions:
                 if region.type == 'WINDOW':
@@ -199,29 +202,33 @@ def copy_pose_from_target(source_arm, target_arm):
         # Bake visual transform directly via the depsgraph — no operator context needed.
         # For each constrained bone, read the evaluated pose matrix and write
         # it back as PoseBone.matrix so it survives constraint removal.
-        # We process bones in natural order (parents before children) which
-        # is guaranteed by Blender's pose.bones ordering.
+        # pose.bones is guaranteed parent-before-child by Blender's internal ordering.
         # PoseBone.matrix setter handles local-space decomposition internally.
         eval_arm = source_arm.evaluated_get(depsgraph)
 
-        for source_bone in source_arm.pose.bones:
-            if source_bone.name not in matched_bone_names:
-                continue
-            eval_bone = eval_arm.pose.bones.get(source_bone.name)
-            if eval_bone is None:
-                continue
+        try:
+            for source_bone in source_arm.pose.bones:
+                if source_bone.name not in matched_bone_names:
+                    continue
+                eval_bone = eval_arm.pose.bones.get(source_bone.name)
+                if eval_bone is None:
+                    continue
 
-            # Copy the evaluated (constraint-resolved) armature-space matrix.
-            # The PoseBone.matrix setter automatically decomposes it into the
-            # correct matrix_basis for this bone's parent and rest-pose transform.
-            source_bone.matrix = eval_bone.matrix.copy()
+                # Copy the evaluated (constraint-resolved) armature-space matrix.
+                # The PoseBone.matrix setter automatically decomposes it into the
+                # correct matrix_basis for this bone's parent and rest-pose transform.
+                source_bone.matrix = eval_bone.matrix.copy()
 
-            # Propagate immediately so child bones see the correct parent matrix.
-            bpy.context.view_layer.update()
+                # Propagate immediately so child bones see the correct parent matrix.
+                bpy.context.view_layer.update()
 
-        # Remove constraints
-        for bone, constraint in constraints_to_remove:
-            bone.constraints.remove(constraint)
+        finally:
+            # Always remove temporary constraints — even if matrix assignment raises.
+            for bone, constraint in constraints_to_remove:
+                try:
+                    bone.constraints.remove(constraint)
+                except Exception:
+                    pass
 
         write_log("Constraints removed. Pose copy complete.")
         return True
@@ -239,7 +246,8 @@ def import_armature_from_blend(filepath):
     Appends an armature from a .blend file into the current scene.
     Compatible with Blender 4.2+ where objects may be nested inside
     collections rather than at the top level.
-    Returns (armature_object, list_of_all_imported_objects) or (None, []).
+    Returns (armature_object, imported_objects, imported_collections)
+    or (None, [], []) on failure.
     """
     try:
         write_log(f"Appending armature from: {filepath}")
@@ -288,7 +296,7 @@ def import_armature_from_blend(filepath):
 
         if target_armature:
             write_log(f"Successfully imported armature: {target_armature.name}")
-            return target_armature, imported_objects
+            return target_armature, imported_objects, imported_collections
         else:
             write_log("No armature found in the specified .blend file.")
             # Cleanup: remove all imported objects then collections
@@ -296,12 +304,13 @@ def import_armature_from_blend(filepath):
                 bpy.data.objects.remove(obj, do_unlink=True)
             for col in imported_collections:
                 bpy.data.collections.remove(col)
-            return None, []
+            return None, [], []
 
     except Exception as e:
         write_log(f"Error importing from .blend: {e}")
         write_log(traceback.format_exc())
-        return None, []
+        return None, [], []
+
 
 def save_mesh_as_shape_key(arm_obj, mesh_obj, report_fn):
     """Saves the current deformation of the mesh as a shape key."""
@@ -457,14 +466,7 @@ class POSECONV_OT_AddMissingBones(Operator):
                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
                 return {'CANCELLED'}
 
-            target_arm, imported_objects = import_armature_from_blend(filepath)
-            imported_collections = [
-                obj.users_collection[0]
-                for obj in imported_objects
-                if obj.users_collection
-                and obj.users_collection[0] not in imported_collections
-                and obj.users_collection[0] != bpy.context.scene.collection
-            ]
+            target_arm, imported_objects, imported_collections = import_armature_from_blend(filepath)
             if not target_arm:
                 self.report({'ERROR'}, "Failed to import armature from file.")
                 return {'CANCELLED'}
@@ -525,15 +527,7 @@ class POSECONV_OT_ConvertPose(Operator):
                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
                 return {'CANCELLED'}
 
-            target_arm, imported_objects = import_armature_from_blend(filepath)
-            # Collect any imported collections so we can clean them up later
-            imported_collections = [
-                obj.users_collection[0]
-                for obj in imported_objects
-                if obj.users_collection
-                and obj.users_collection[0] not in imported_collections
-                and obj.users_collection[0] != bpy.context.scene.collection
-            ]
+            target_arm, imported_objects, imported_collections = import_armature_from_blend(filepath)
             if not target_arm:
                 self.report({'ERROR'}, "Failed to import armature from file.")
                 return {'CANCELLED'}

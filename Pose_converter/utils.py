@@ -165,7 +165,10 @@ def _get_view3d_context():
     or (None, None) if none exists.  Used to build a temp_override for operators
     that require a 3D Viewport context in Blender 4.2+ / 5.x.
     """
-    for area in bpy.context.screen.areas:
+    screen = bpy.context.screen
+    if screen is None:
+        return None, None
+    for area in screen.areas:
         if area.type == 'VIEW_3D':
             for region in area.regions:
                 if region.type == 'WINDOW':
