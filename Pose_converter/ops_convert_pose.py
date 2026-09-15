@@ -8,30 +8,55 @@ from .utils import (
     apply_new_armature_modifier
 )
 
+def _get_view3d_context():
+    """
+    Returns (area, region) for the first VIEW_3D area found in the current screen,
+    or (None, None) if none exists.  Used to build a temp_override for operators
+    that require a 3D Viewport context in Blender 4.2+ / 5.x.
+    """
+    screen = bpy.context.screen
+    if screen is None:
+        return None, None
+    for area in screen.areas:
+        if area.type == 'VIEW_3D':
+            for region in area.regions:
+                if region.type == 'WINDOW':
+                    return area, region
+    return None, None
+
+
 def apply_as_rest_pose(armature_obj):
     """Applies the current pose as the rest pose."""
     original_mode = bpy.context.mode
-    
+
     bpy.context.view_layer.objects.active = armature_obj
-    
+
     if original_mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
-    
+
     # Switch to Pose Mode
     bpy.ops.object.mode_set(mode='POSE')
-    
+
     # IMPORTANT: Select all bones to ensure the apply affects everything
     bpy.ops.pose.select_all(action='SELECT')
-    
-    # Apply Pose as Rest Pose
-    bpy.ops.pose.armature_apply()
-    
+
+    # Apply Pose as Rest Pose.
+    # In Blender 4.2+ / 5.x this operator requires a VIEW_3D context.
+    area, region = _get_view3d_context()
+    if area and region:
+        with bpy.context.temp_override(area=area, region=region):
+            bpy.ops.pose.armature_apply()
+    else:
+        # Fallback for headless / no viewport — may still work in some contexts
+        bpy.ops.pose.armature_apply()
+
     bpy.ops.object.mode_set(mode='OBJECT')
-    
+
     if original_mode == 'POSE':
         bpy.ops.object.mode_set(mode='POSE')
-    
+
     write_log("Applied current pose as rest pose")
+
 
 def strip_prefix(name):
     """Strips common prefixes from bone names for better matching."""
@@ -121,42 +146,40 @@ def copy_pose_from_target(source_arm, target_arm):
     """
     Copies the pose from the target armature to the source armature using CONSTRAINTS.
     This ensures visual matching regardless of Rest Pose differences.
+    Compatible with Blender 4.2+ / 5.x (no context-sensitive operators used).
     """
     try:
         write_log("--- Starting Pose Copy (Constraint Method) ---")
         write_log(f"Source Armature: {source_arm.name}")
         write_log(f"Target Armature: {target_arm.name}")
-        
+
         # Ensure we are in Pose Mode
         bpy.context.view_layer.objects.active = source_arm
         bpy.ops.object.mode_set(mode='POSE')
-        
+
         # Deselect all to start clean
         bpy.ops.pose.select_all(action='DESELECT')
-        
+
         # Build a map of normalized bone names for the target armature
         target_bones_map = {strip_prefix(b.name): b for b in target_arm.pose.bones}
-        
+
         constraints_to_remove = []
-        matched_count = 0
-        
+        matched_bone_names = set()  # track by name — Bone.select removed in Blender 5.2
+
         for source_bone in source_arm.pose.bones:
             normalized_name = strip_prefix(source_bone.name)
             target_bone = target_bones_map.get(normalized_name)
-            
+
             if target_bone:
-                # Select the bone so visual_transform_apply works on it
-                source_bone.bone.select = True
-                matched_count += 1
-                
+                matched_bone_names.add(source_bone.name)
+
                 # Add Copy Rotation Constraint
                 c_rot = source_bone.constraints.new('COPY_ROTATION')
                 c_rot.target = target_arm
                 c_rot.subtarget = target_bone.name
                 c_rot.name = "TEMP_POSE_CONV_ROT"
-                
                 constraints_to_remove.append((source_bone, c_rot))
-                
+
                 # If root bone (no parent), copy Location too
                 if source_bone.parent is None:
                     c_loc = source_bone.constraints.new('COPY_LOCATION')
@@ -164,68 +187,130 @@ def copy_pose_from_target(source_arm, target_arm):
                     c_loc.subtarget = target_bone.name
                     c_loc.name = "TEMP_POSE_CONV_LOC"
                     constraints_to_remove.append((source_bone, c_loc))
-        
+
+        matched_count = len(matched_bone_names)
         if matched_count == 0:
             write_log("CRITICAL: No matching bones found! Check bone names.")
             return False
-            
-        write_log(f"Added constraints to {matched_count} bones. Applying visual transform...")
-        
-        # Update dependency graph
-        bpy.context.view_layer.update()
-        
-        # Bake the constraints into the Pose
-        bpy.ops.pose.visual_transform_apply()
-        
-        # Remove constraints
-        for bone, constraint in constraints_to_remove:
-            bone.constraints.remove(constraint)
-            
+
+        write_log(f"Added constraints to {matched_count} bones. Baking visual transform...")
+
+        # Update the dependency graph so constraint results are computed
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        depsgraph.update()
+
+        # Bake visual transform directly via the depsgraph — no operator context needed.
+        # For each constrained bone, read the evaluated pose matrix and write
+        # it back as PoseBone.matrix so it survives constraint removal.
+        # pose.bones is guaranteed parent-before-child by Blender's internal ordering.
+        # PoseBone.matrix setter handles local-space decomposition internally.
+        eval_arm = source_arm.evaluated_get(depsgraph)
+
+        try:
+            for source_bone in source_arm.pose.bones:
+                if source_bone.name not in matched_bone_names:
+                    continue
+                eval_bone = eval_arm.pose.bones.get(source_bone.name)
+                if eval_bone is None:
+                    continue
+
+                # Copy the evaluated (constraint-resolved) armature-space matrix.
+                # The PoseBone.matrix setter automatically decomposes it into the
+                # correct matrix_basis for this bone's parent and rest-pose transform.
+                source_bone.matrix = eval_bone.matrix.copy()
+
+                # Propagate immediately so child bones see the correct parent matrix.
+                bpy.context.view_layer.update()
+
+        finally:
+            # Always remove temporary constraints — even if matrix assignment raises.
+            for bone, constraint in constraints_to_remove:
+                try:
+                    bone.constraints.remove(constraint)
+                except Exception:
+                    pass
+
         write_log("Constraints removed. Pose copy complete.")
         return True
-        
+
+
     except Exception as e:
-        write_log(f"--- CRITICAL ERROR in copy_pose_from_target ---")
+        write_log("--- CRITICAL ERROR in copy_pose_from_target ---")
         write_log(f"Error: {e}")
         write_log(traceback.format_exc())
         return False
 
+
 def import_armature_from_blend(filepath):
     """
     Appends an armature from a .blend file into the current scene.
-    Returns the appended object or None.
+    Compatible with Blender 4.2+ where objects may be nested inside
+    collections rather than at the top level.
+    Returns (armature_object, imported_objects, imported_collections)
+    or (None, [], []) on failure.
     """
     try:
         write_log(f"Appending armature from: {filepath}")
-        
-        # Load all objects from the blend file
-        with bpy.data.libraries.load(filepath) as (data_from, data_to):
-            data_to.objects = [name for name in data_from.objects]
-            
+
+        # Use the scene's master collection as a reliable link target
+        # (bpy.context.collection can be None or unexpected in script context)
+        scene_col = bpy.context.scene.collection
+
+        imported_collections = []
         imported_objects = []
         target_armature = None
-        
-        # Link objects to scene and find the armature
+
+        # Load both top-level objects AND collections.
+        # In Blender 4.x+ files, objects are typically nested inside collections
+        # rather than sitting at the top level, so data_from.objects may be empty.
+        with bpy.data.libraries.load(filepath, link=False) as (data_from, data_to):
+            data_to.objects = list(data_from.objects)
+            data_to.collections = list(data_from.collections)
+
+        # --- Link imported collections and harvest their objects ---
+        for col in data_to.collections:
+            if col is None:
+                continue
+            try:
+                scene_col.children.link(col)
+                imported_collections.append(col)
+                for obj in col.all_objects:
+                    if obj not in imported_objects:
+                        imported_objects.append(obj)
+                        if obj.type == 'ARMATURE' and target_armature is None:
+                            target_armature = obj
+            except Exception as col_err:
+                write_log(f"Warning: could not link collection '{col.name}': {col_err}")
+
+        # --- Also link any top-level objects not already covered by a collection ---
         for obj in data_to.objects:
-            if obj:
-                bpy.context.collection.objects.link(obj)
+            if obj is None or obj in imported_objects:
+                continue
+            try:
+                scene_col.objects.link(obj)
                 imported_objects.append(obj)
                 if obj.type == 'ARMATURE' and target_armature is None:
                     target_armature = obj
-        
+            except Exception as obj_err:
+                write_log(f"Warning: could not link object '{obj.name}': {obj_err}")
+
         if target_armature:
             write_log(f"Successfully imported armature: {target_armature.name}")
-            return target_armature, imported_objects
+            return target_armature, imported_objects, imported_collections
         else:
             write_log("No armature found in the specified .blend file.")
-            # Cleanup if no armature found
+            # Cleanup: remove all imported objects then collections
             for obj in imported_objects:
                 bpy.data.objects.remove(obj, do_unlink=True)
-            return None, []
-            
+            for col in imported_collections:
+                bpy.data.collections.remove(col)
+            return None, [], []
+
     except Exception as e:
         write_log(f"Error importing from .blend: {e}")
-        return None, []
+        write_log(traceback.format_exc())
+        return None, [], []
+
 
 def save_mesh_as_shape_key(arm_obj, mesh_obj, report_fn):
     """Saves the current deformation of the mesh as a shape key."""
@@ -234,17 +319,24 @@ def save_mesh_as_shape_key(arm_obj, mesh_obj, report_fn):
         bpy.ops.object.mode_set(mode='OBJECT')
         bpy.context.view_layer.objects.active = mesh_obj
         mesh_obj.select_set(True)
-        
+
         arm_modifier = next((mod for mod in mesh_obj.modifiers if mod.type == 'ARMATURE' and mod.object == arm_obj), None)
-        
+
         if not arm_modifier:
             arm_modifier = mesh_obj.modifiers.new(name="Armature", type='ARMATURE')
             arm_modifier.object = arm_obj
             write_log(f"Created new armature modifier for mesh '{mesh_obj.name}'")
-        
-        bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True, modifier=arm_modifier.name)
+
+        # modifier_apply_as_shapekey requires a VIEW_3D area context in Blender 4.2+ / 5.x
+        area, region = _get_view3d_context()
+        if area and region:
+            with bpy.context.temp_override(area=area, region=region):
+                bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True, modifier=arm_modifier.name)
+        else:
+            bpy.ops.object.modifier_apply_as_shapekey(keep_modifier=True, modifier=arm_modifier.name)
+
         write_log(f"Saved current deformation as shape key for mesh '{mesh_obj.name}'")
-        
+
         if mesh_obj.data.shape_keys and mesh_obj.data.shape_keys.key_blocks:
             new_shape_key = mesh_obj.data.shape_keys.key_blocks[-1]
             new_shape_key.name = "PoseConverterBackup"
@@ -253,11 +345,12 @@ def save_mesh_as_shape_key(arm_obj, mesh_obj, report_fn):
         else:
             report_fn({'WARNING'}, f"Failed to create shape key for mesh '{mesh_obj.name}'")
             return False
-            
+
     except Exception as e:
         write_log(f"Error saving mesh as shape key for '{mesh_obj.name}': {e}")
         report_fn({'ERROR'}, f"Failed to save mesh as shape key: {e}")
         return False
+
 
 def process_shape_keys_after_rest_pose(mesh_obj, report_fn):
     """Processes shape keys after applying the rest pose."""
@@ -351,14 +444,15 @@ class POSECONV_OT_AddMissingBones(Operator):
     def execute(self, context):
         arm_obj = context.object
         props = context.scene.firerat_pose_converter_props
-        
+
         if not arm_obj or arm_obj.type != 'ARMATURE':
             self.report({'WARNING'}, "Select a source Armature object.")
             return {'CANCELLED'}
 
         target_arm = None
         imported_objects = []
-        
+        imported_collections = []
+
         if props.target_source == 'CUSTOM':
             target_arm = props.target_armature
             if not target_arm:
@@ -367,12 +461,12 @@ class POSECONV_OT_AddMissingBones(Operator):
         else:
             filename = "male_default.blend" if props.target_source == 'MALE' else "female_default.blend"
             filepath = os.path.join(os.path.dirname(__file__), filename)
-            
+
             if not os.path.exists(filepath):
-                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
-                 return {'CANCELLED'}
-            
-            target_arm, imported_objects = import_armature_from_blend(filepath)
+                self.report({'ERROR'}, f"Pose data file not found: {filename}")
+                return {'CANCELLED'}
+
+            target_arm, imported_objects, imported_collections = import_armature_from_blend(filepath)
             if not target_arm:
                 self.report({'ERROR'}, "Failed to import armature from file.")
                 return {'CANCELLED'}
@@ -384,11 +478,19 @@ class POSECONV_OT_AddMissingBones(Operator):
             write_log(f"Error adding missing bones: {e}")
             self.report({'ERROR'}, f"Failed to add missing bones: {e}")
         finally:
-            if imported_objects:
-                for obj in imported_objects:
+            for obj in imported_objects:
+                try:
                     bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+            for col in imported_collections:
+                try:
+                    bpy.data.collections.remove(col)
+                except Exception:
+                    pass
 
         return {'FINISHED'}
+
 
 class POSECONV_OT_ConvertPose(Operator):
     bl_idname = "firerat_poseconv.convert_pose"
@@ -398,18 +500,19 @@ class POSECONV_OT_ConvertPose(Operator):
 
     def execute(self, context):
         write_log("Starting pose conversion...")
-        
+
         arm_obj = context.object
         props = context.scene.firerat_pose_converter_props
-        
+
         if not arm_obj or arm_obj.type != 'ARMATURE':
             self.report({'WARNING'}, "Select a source Armature object.")
             return {'CANCELLED'}
-        
+
         # 1. Acquire Target Armature
         target_arm = None
         imported_objects = []
-        
+        imported_collections = []
+
         if props.target_source == 'CUSTOM':
             target_arm = props.target_armature
             if not target_arm:
@@ -419,15 +522,28 @@ class POSECONV_OT_ConvertPose(Operator):
             # Import default pose from .blend file
             filename = "male_default.blend" if props.target_source == 'MALE' else "female_default.blend"
             filepath = os.path.join(os.path.dirname(__file__), filename)
-            
+
             if not os.path.exists(filepath):
-                 self.report({'ERROR'}, f"Pose data file not found: {filename}")
-                 return {'CANCELLED'}
-            
-            target_arm, imported_objects = import_armature_from_blend(filepath)
+                self.report({'ERROR'}, f"Pose data file not found: {filename}")
+                return {'CANCELLED'}
+
+            target_arm, imported_objects, imported_collections = import_armature_from_blend(filepath)
             if not target_arm:
                 self.report({'ERROR'}, "Failed to import armature from file.")
                 return {'CANCELLED'}
+
+        def _cleanup_imported():
+            """Remove temporary imported objects and orphan collections."""
+            for obj in imported_objects:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+            for col in imported_collections:
+                try:
+                    bpy.data.collections.remove(col)
+                except Exception:
+                    pass
 
         # 1.5 Add Missing Bones if requested
         if props.add_missing_bones:
@@ -441,23 +557,17 @@ class POSECONV_OT_ConvertPose(Operator):
         try:
             if not copy_pose_from_target(arm_obj, target_arm):
                 self.report({'ERROR'}, "Pose copying failed or no bones matched.")
-                # Cleanup imported objects if failed
-                if imported_objects:
-                    for obj in imported_objects:
-                        bpy.data.objects.remove(obj, do_unlink=True)
+                _cleanup_imported()
                 return {'CANCELLED'}
         except Exception as e:
-             # Cleanup on error
-             if imported_objects:
-                 for obj in imported_objects:
-                     bpy.data.objects.remove(obj, do_unlink=True)
-             raise e
+            _cleanup_imported()
+            raise e
 
         # Cleanup imported objects now that pose is copied
         if imported_objects:
             write_log("Removing imported temporary armature...")
-            for obj in imported_objects:
-                bpy.data.objects.remove(obj, do_unlink=True)
+            _cleanup_imported()
+
 
         try:
             # 3. Process Meshes
@@ -473,7 +583,8 @@ class POSECONV_OT_ConvertPose(Operator):
                 save_mesh_as_shape_key(arm_obj, mesh_obj, self.report)
             
             for mesh_obj in meshes_without_shape_keys:
-                process_without_shape_keys(arm_obj, mesh_obj, self.report)
+                if not process_without_shape_keys(arm_obj, mesh_obj, self.report):
+                    return {'CANCELLED'}
             
             # 4. Apply as Rest Pose
             bpy.context.view_layer.objects.active = arm_obj
@@ -525,7 +636,8 @@ class POSECONV_OT_SetRestPose(Operator):
                 save_mesh_as_shape_key(arm_obj, mesh_obj, self.report)
             
             for mesh_obj in meshes_without_shape_keys:
-                process_without_shape_keys(arm_obj, mesh_obj, self.report)
+                if not process_without_shape_keys(arm_obj, mesh_obj, self.report):
+                    return {'CANCELLED'}
             
             bpy.context.view_layer.objects.active = arm_obj
             arm_obj.select_set(True)
