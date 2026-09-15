@@ -214,7 +214,9 @@ def apply_new_armature_modifier(mesh_obj, arm_obj, report_fn):
         print_and_log(report_fn, 'INFO', "Applied new armature modifier")
     except Exception as e:
         print_and_log(report_fn, 'WARNING', f"Failed to apply modifier: {e}")
-        # Continue even on failure
+        if mod.name in mesh_obj.modifiers:
+            mesh_obj.modifiers.remove(mod)
+        return False
 
     write_log("New armature modifier applied, original modifiers preserved")
 

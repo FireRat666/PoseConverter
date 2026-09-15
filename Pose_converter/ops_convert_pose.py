@@ -583,7 +583,8 @@ class POSECONV_OT_ConvertPose(Operator):
                 save_mesh_as_shape_key(arm_obj, mesh_obj, self.report)
             
             for mesh_obj in meshes_without_shape_keys:
-                process_without_shape_keys(arm_obj, mesh_obj, self.report)
+                if not process_without_shape_keys(arm_obj, mesh_obj, self.report):
+                    return {'CANCELLED'}
             
             # 4. Apply as Rest Pose
             bpy.context.view_layer.objects.active = arm_obj
@@ -635,7 +636,8 @@ class POSECONV_OT_SetRestPose(Operator):
                 save_mesh_as_shape_key(arm_obj, mesh_obj, self.report)
             
             for mesh_obj in meshes_without_shape_keys:
-                process_without_shape_keys(arm_obj, mesh_obj, self.report)
+                if not process_without_shape_keys(arm_obj, mesh_obj, self.report):
+                    return {'CANCELLED'}
             
             bpy.context.view_layer.objects.active = arm_obj
             arm_obj.select_set(True)
