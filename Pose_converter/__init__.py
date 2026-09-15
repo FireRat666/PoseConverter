@@ -6,8 +6,8 @@
 bl_info = {
     "name": "FireRat Pose Converter",
     "author": "FireRat",
-    "version": (0, 1, 3),
-    "blender": (3, 6, 0),
+    "version": (0, 2, 0),
+    "blender": (4, 2, 0),
     "location": "View3D > Tool Shelf > FireRat",
     "description": "Copy pose from one armature to another, add missing bones, and apply it as a rest pose.",
     "category": "Rigging",

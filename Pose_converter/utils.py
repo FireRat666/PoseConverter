@@ -159,10 +159,24 @@ def rename_shape_key(obj, old_name, new_name):
     if old_name in kb:
         kb[old_name].name = new_name
 
+def _get_view3d_context():
+    """
+    Returns (area, region) for the first VIEW_3D area in the current screen,
+    or (None, None) if none exists.  Used to build a temp_override for operators
+    that require a 3D Viewport context in Blender 4.2+ / 5.x.
+    """
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for region in area.regions:
+                if region.type == 'WINDOW':
+                    return area, region
+    return None, None
+
+
 def apply_new_armature_modifier(mesh_obj, arm_obj, report_fn):
     """
     Keep the existing armature modifier and apply a new one.
-    
+
     Parameters:
         mesh_obj: Mesh object
         arm_obj: Armature object
@@ -170,29 +184,36 @@ def apply_new_armature_modifier(mesh_obj, arm_obj, report_fn):
     """
     # Switch to Object Mode
     bpy.ops.object.mode_set(mode='OBJECT')
-    
+
     # Activate the mesh object
     bpy.context.view_layer.objects.active = mesh_obj
     mesh_obj.select_set(True)
-    
+
     # Do not select the armature object
     arm_obj.select_set(False)
-    
+
     write_log("Adding new armature modifier for application...")
-    
+
     # Add a new armature modifier
     mod = mesh_obj.modifiers.new(name="ArmatureTemp", type='ARMATURE')
     mod.object = arm_obj
-    
-    # Apply the newly added modifier
+
+    # Apply the newly added modifier.
+    # In Blender 4.2+ / 5.x, modifier_apply requires a VIEW_3D context.
     try:
         write_log(f"Applying new armature modifier: {mod.name}")
-        bpy.ops.object.modifier_apply(modifier=mod.name)
-        print_and_log(report_fn, 'INFO', f"Applied new armature modifier")
+        area, region = _get_view3d_context()
+        if area and region:
+            with bpy.context.temp_override(area=area, region=region):
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+        else:
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+        print_and_log(report_fn, 'INFO', "Applied new armature modifier")
     except Exception as e:
         print_and_log(report_fn, 'WARNING', f"Failed to apply modifier: {e}")
         # Continue even on failure
-        
+
     write_log("New armature modifier applied, original modifiers preserved")
-    
+
     return True
+
