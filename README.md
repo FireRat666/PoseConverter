@@ -14,7 +14,7 @@ This version is a fork of the original T2A Pose Converter, expanded with feature
 - **Coexistence Mode**: Designed to run alongside the original T2A plugin without naming conflicts.
 
 ## Requirements
-- Blender 3.6 or higher
+- Blender 4.2 or higher
 
 ## Installation
 1. Download the `Pose_converter` folder or zip.
